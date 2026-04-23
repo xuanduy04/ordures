@@ -1,0 +1,113 @@
+# Inherit the baseline GRPO config and override only what this example needs.
+defaults: "grpo_math_1B.yaml"
+
+grpo:
+  # Use smaller values so the example is easy to run locally.
+  num_prompts_per_step: 8
+  # Keep group size moderate for fast testing.
+  num_generations_per_prompt: 4
+  # Short run length for demonstration.
+  max_num_steps: 20
+  # Validate periodically so both tasks report metrics during training.
+  val_period: 5
+  # Small validation set cap to keep runs quick.
+  max_val_samples: 32
+  # Validation batch size.
+  val_batch_size: 32
+
+checkpointing:
+  # Save outputs in a path unique to this second example.
+  checkpoint_dir: "results/grpo_math_mcq_multitask"
+  # Track validation accuracy as selection metric.
+  # (For the custom MCQ env this is explicit; math env reports its own accuracy-like metrics too.)
+  metric_name: "val:accuracy"
+
+policy:
+  # Example model. Replace with your own model/checkpoint as needed.
+  model_name: "Qwen/Qwen2.5-1.5B"
+  # Keep context window moderate.
+  max_total_sequence_length: 1024
+  # Effective global train batch.
+  train_global_batch_size: 32
+  # Per-device micro batch.
+  train_micro_batch_size: 1
+  # Logprob micro batch.
+  logprob_batch_size: 1
+  generation:
+    # Mixed math + MCQ here generally needs short outputs.
+    max_new_tokens: 64
+
+data:
+  # Replace base data block to clearly define two train tasks + two val tasks.
+  _override_: true
+  # Max input seq length for processor-level truncation.
+  max_input_seq_length: 1024
+  # Shuffle mixed-task training rows.
+  shuffle: true
+  # Dataloader workers.
+  num_workers: 1
+
+  # Train split: list of datasets.
+  # Dataset 1 -> math env.
+  # Dataset 2 -> mcq env.
+  train:
+    - dataset_name: "ResponseDataset"
+      data_path: "examples/data/math_mcq_multitask/math_train.jsonl"
+      env_name: "math"
+    - dataset_name: "ResponseDataset"
+      data_path: "examples/data/math_mcq_multitask/mcq_train.jsonl"
+      env_name: "mcq_exact"
+
+  # Validation split mirrors training tasks.
+  validation:
+    - dataset_name: "ResponseDataset"
+      data_path: "examples/data/math_mcq_multitask/math_val.jsonl"
+      env_name: "math"
+    - dataset_name: "ResponseDataset"
+      data_path: "examples/data/math_mcq_multitask/mcq_val.jsonl"
+      env_name: "mcq_exact"
+
+  # Defaults applied to each train/validation dataset entry above unless overridden.
+  default:
+    # ResponseDataset expects input/output keys from JSONL rows.
+    input_key: "input"
+    output_key: "output"
+    # No extra prompt wrappers for this minimal, transparent example.
+    prompt_file: null
+    system_prompt_file: null
+    # Reuse built-in processor that sets extra_env_info.ground_truth from output.
+    processor: "math_hf_data_processor"
+    # This default env_name is intentionally omitted because each dataset
+    # explicitly declares its own env_name.
+
+env:
+  # Explicitly disable NeMo-Gym path for this custom multitask example.
+  should_use_nemo_gym: false
+  # Not using GenRM compare.
+  use_genrm_compare: false
+
+  # Built-in math environment config.
+  math:
+    # Number of parallel verifier workers for math checks.
+    num_workers: 4
+    # Use default HF math verify implementation.
+    math_verify_impl: "hf_math_verify"
+
+  # Custom MCQ environment config block.
+  # The actor class is registered by examples/run_grpo_math_mcq_multitask.py
+  # under env_name "mcq_exact".
+  mcq_exact: {}
+
+logger:
+  # Keep external loggers off for a minimal local example.
+  wandb_enabled: false
+  tensorboard_enabled: false
+  mlflow_enabled: false
+  swanlab_enabled: false
+  # Keep GPU monitor off for low-noise outputs.
+  monitor_gpus: false
+
+cluster:
+  # Minimal local target.
+  gpus_per_node: 1
+  num_nodes: 1

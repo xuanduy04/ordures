@@ -1,0 +1,4 @@
+{"input":"Question: Which letter corresponds to the largest ocean on Earth?\nA) Atlantic\nB) Indian\nC) Pacific\nD) Arctic\nAnswer with only one option letter.","output":"c"}
+{"input":"Question: Which planet is known as the Red Planet?\nA) Mars\nB) Venus\nC) Jupiter\nD) Saturn\nAnswer with only one option letter.","output":"a"}
+{"input":"Question: What is 9 + 1?\nA) 8\nB) 9\nC) 10\nD) 11\nAnswer with only one option letter.","output":"c"}
+{"input":"Question: Which language is primarily used for web page structure?\nA) CSS\nB) HTML\nC) SQL\nD) Bash\nAnswer with only one option letter.","output":"b"}

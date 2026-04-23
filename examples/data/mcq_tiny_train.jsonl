@@ -1,0 +1,4 @@
+{"input":"Question: 2 + 2 = ?\nA) 3\nB) 4\nC) 5\nD) 6\nAnswer with a single option letter only.","output":"b"}
+{"input":"Question: Capital of France?\nA) Berlin\nB) Madrid\nC) Paris\nD) Rome\nAnswer with a single option letter only.","output":"c"}
+{"input":"Question: Largest planet in our solar system?\nA) Earth\nB) Jupiter\nC) Mars\nD) Venus\nAnswer with a single option letter only.","output":"b"}
+{"input":"Question: 5 * 6 = ?\nA) 30\nB) 25\nC) 35\nD) 40\nAnswer with a single option letter only.","output":"a"}

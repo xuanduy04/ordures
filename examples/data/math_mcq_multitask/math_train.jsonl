@@ -1,0 +1,4 @@
+{"input":"Compute 2 + 3. Reply with only the final number.","output":"5"}
+{"input":"Compute 10 - 7. Reply with only the final number.","output":"3"}
+{"input":"Compute 4 * 6. Reply with only the final number.","output":"24"}
+{"input":"Compute 81 / 9. Reply with only the final number.","output":"9"}

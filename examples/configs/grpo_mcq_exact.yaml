@@ -1,0 +1,83 @@
+# Base this config on the standard GRPO config so we only override what is needed.
+defaults: "grpo_math_1B.yaml"
+
+grpo:
+  # Number of unique prompts pulled each training step.
+  num_prompts_per_step: 8
+  # Number of sampled responses per prompt for group-based policy optimization.
+  num_generations_per_prompt: 4
+  # Keep steps small for example/demo runs.
+  max_num_steps: 20
+  # Run validation every N train steps.
+  val_period: 5
+  # Cap number of validation samples to evaluate per validation event.
+  max_val_samples: 32
+  # Validation dataloader batch size.
+  val_batch_size: 32
+
+checkpointing:
+  # Output location for checkpoints from this example run.
+  checkpoint_dir: "results/grpo_mcq_exact"
+  # Use validation accuracy from the env metrics for model selection.
+  metric_name: "val:accuracy"
+
+policy:
+  # Example base model. Replace with your target checkpoint/model as needed.
+  model_name: "Qwen/Qwen2.5-1.5B"
+  # Upper bound for total sequence length in training/logprob pipeline.
+  max_total_sequence_length: 1024
+  # Effective policy update batch size.
+  train_global_batch_size: 32
+  # Per-device microbatch size.
+  train_micro_batch_size: 1
+  # Microbatch used for logprob computation.
+  logprob_batch_size: 1
+  generation:
+    # We only need a short answer for MCQ labels.
+    max_new_tokens: 64
+
+data:
+  # Truncation threshold at data processing stage.
+  max_input_seq_length: 1024
+  train:
+    # Local JSONL training file.
+    data_path: "examples/data/mcq_tiny_train.jsonl"
+  validation:
+    # Local JSONL validation file.
+    data_path: "examples/data/mcq_tiny_val.jsonl"
+  default:
+    # Use generic JSONL response dataset loader.
+    dataset_name: "ResponseDataset"
+    # Map JSONL fields -> dataset expected keys.
+    input_key: "input"
+    output_key: "output"
+    # No additional prompt wrappers in this minimal example.
+    prompt_file: null
+    system_prompt_file: null
+    # Reuse built-in processor that writes output into extra_env_info["ground_truth"].
+    processor: "math_hf_data_processor"
+    # Route this dataset to the custom env registered in run_grpo_mcq.py.
+    env_name: "mcq_exact"
+
+env:
+  # Explicitly disable NeMo-Gym path for this custom env example.
+  should_use_nemo_gym: false
+  # Not using GenRM comparison flow in this minimal setup.
+  use_genrm_compare: false
+  # Config block consumed by MCQExactMatchEnvironment.__init__(cfg).
+  # Empty is sufficient for current implementation.
+  mcq_exact: {}
+
+logger:
+  # Keep external logging disabled for minimal local runs.
+  wandb_enabled: false
+  tensorboard_enabled: false
+  mlflow_enabled: false
+  swanlab_enabled: false
+  # Disable GPU monitoring noise for this tiny example.
+  monitor_gpus: false
+
+cluster:
+  # Minimal single-node, single-GPU example target.
+  gpus_per_node: 1
+  num_nodes: 1
