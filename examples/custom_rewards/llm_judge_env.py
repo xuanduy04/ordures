@@ -12,6 +12,7 @@ from nemo_rl.data.interfaces import LLMMessageLogType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.environments.utils import chunk_list_to_workers
 from nemo_rl.environments.interfaces import EnvironmentInterface, EnvironmentReturn
+from examples.custom_rewards.format_reward import verify_format
 
 
 class LLMJudgeMetadata(TypedDict):
@@ -29,6 +30,24 @@ class LLMJudgeEnvConfig(TypedDict):
     system_prompt: str
     # Number of Ray workers to judge in parallel. Defaults to 1.
     num_workers: NotRequired[int]
+
+    max_judge_output_tokens: int
+
+# if VOID_ANSWER_TOKEN in judge prompt, then ignore the judge and return 0.0 reward
+VOID_ANSWER_TOKEN = "<|void_answer_VGhpcyBsaWJyYXJ5IGlzIHNvIHRyYXNoIQ==|>"
+DEFAULT_JUDGE_SYSTEM_PROMPT = r"""You are an impartial evaluator.
+You are given:
+- A gold (correct) label
+- A model-generated answer
+
+Your task is to determine whether the answer is factually consistent with the gold label.
+Rules:
+- Return 1 inside \boxed{}, i.e. \boxed{1} if the answer conveys the same meaning as the gold label.
+- Otherwise, return 0 inside \boxed{}, i.e. \boxed{0} if the answer contradicts, is inconsistent, incomplete, or adds incorrect information.
+- Minor wording differences are acceptable if the meaning is the same.
+- Do not use external knowledge, only compare the answer to the gold label.
+- Accept the answer regardless of formatting or structural differences, as long as the core factual content aligns with the gold label.
+- If the model-generated answer contains a clear final choice (e.g., "A", "B", etc.), prioritize that choice over any additional text, even if extra, redundant, or noisy content appears. For example, "C. Not wrong, Wrong" should be interpreted as the model selecting C."""
 
 
 def _normalize_to_chat_completions_url(raw_url: str) -> str:
@@ -75,12 +94,21 @@ def _build_judge_user_prompt(
     problem_text: str,
     ground_truth: str,
     assistant_answer: str,
+    void_answer: bool = False,
 ) -> str:
-    # We keep this explicit and structured to reduce judge ambiguity.
+    if void_answer:
+        return VOID_ANSWER_TOKEN
+
+    # The assistant answer that the judge has access to should only be the part after the thinking.
+    assistant_answer = (
+        assistant_answer.split["</think>"][-1]
+        if "</think>" in assistant_answer
+        else assistant_answer
+    )
     return (
         f"[Problem]\n{problem_text}\n\n"
-        f"[Reference Answer]\n{ground_truth}\n\n"
-        f"[Assistant Answer]\n{assistant_answer}\n"
+        f"[Gold label Answer]\n{ground_truth}\n\n"
+        f"[Model generated Answer]\n{assistant_answer}\n"
     )
 
 
@@ -110,7 +138,15 @@ def _extract_judge_text(response_json: dict[str, Any]) -> str:
 
 
 def _parse_score(judge_text: str) -> float:
-    # Handle common "x/y" patterns first (example: "7/10").
+    # We explicitly prompted the judge to put his answer in \boxed{}
+    marker = r"\boxed{"
+    idx = judge_text.rfind(marker)  # rightmost occurrence
+    after = idx + len(marker)  # index of char immediately after "{"
+    if idx != -1 and after < len(judge_text):
+        if judge_text[after] in ["0", "1"]:
+            return float(judge_text[after])
+
+    # Fallback 1: Handle common "x/y" patterns (example: "7/10").
     fraction_match = re.search(r"(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)", judge_text)
     if fraction_match:
         numerator = float(fraction_match.group(1))
@@ -118,7 +154,7 @@ def _parse_score(judge_text: str) -> float:
         if denominator != 0:
             return max(0.0, min(1.0, numerator / denominator))
 
-    # Fallback: first scalar number in output.
+    # Fallback 2: first scalar number in output.
     scalar_match = re.search(r"-?\d+(?:\.\d+)?", judge_text)
     if not scalar_match:
         return 0.0
@@ -132,41 +168,30 @@ def _parse_score(judge_text: str) -> float:
     return max(0.0, min(1.0, score))
 
 
-def _build_observation(
-    score: float, judge_text: str, judge_error: str | None
-) -> dict[str, str]:
-    if judge_error is not None:
-        return {
-            "role": "environment",
-            "content": f"Environment: llm_judge_error ({judge_error})",
-        }
-
-    # Keep feedback compact so logs remain readable.
-    judge_preview = judge_text.replace("\n", " ").strip()[:160]
-    return {
-        "role": "environment",
-        "content": (
-            f"Environment: llm_judge_score={score:.3f}; "
-            f"judge_text='{judge_preview}'"
-        ),
-    }
-
-
 @ray.remote(max_restarts=-1, max_task_retries=-1)
 class LLMJudgeVerifyWorker:
-    # Keep judge responses short and deterministic to make parsing reliable.
-    _REQUEST_TIMEOUT_SECONDS = 60
-    _MAX_JUDGE_OUTPUT_TOKENS = 32
+    _REQUEST_TIMEOUT_SECONDS = 600
 
     def __init__(
-        self, vllm_chat_completions_url: str, model: str, system_prompt: str
+        self,
+        vllm_chat_completions_url: str,
+        model: str,
+        system_prompt: str,
+        max_judge_output_tokens: int = 0,
     ) -> None:
         self.vllm_chat_completions_url = vllm_chat_completions_url
         self.model = model
         self.system_prompt = system_prompt
+        self.max_judge_output_tokens = max_judge_output_tokens
         self._session = requests.Session()
 
     def _query_llm_judge(self, judge_prompt: str) -> tuple[float, str, str | None]:
+        if VOID_ANSWER_TOKEN in judge_prompt:
+            return (
+                0.0,
+                judge_prompt,
+                "Answer was specifically instructed to be voided. Judge was not called.",
+            )
         request_payload: dict[str, Any] = {
             "messages": [
                 {"role": "system", "content": self.system_prompt},
@@ -174,9 +199,10 @@ class LLMJudgeVerifyWorker:
             ],
             "model": self.model,
             "temperature": 0.0,
-            "max_tokens": self._MAX_JUDGE_OUTPUT_TOKENS,
             "stream": False,
         }
+        if self.max_judge_output_tokens > 0:
+            request_payload["max_tokens"] = self.max_judge_output_tokens
 
         try:
             response = self._session.post(
@@ -196,7 +222,9 @@ class LLMJudgeVerifyWorker:
     def verify(
         self, judge_prompt_batch: list[str]
     ) -> list[tuple[float, str, str | None]]:
-        return [self._query_llm_judge(judge_prompt) for judge_prompt in judge_prompt_batch]
+        return [
+            self._query_llm_judge(judge_prompt) for judge_prompt in judge_prompt_batch
+        ]
 
     def shutdown(self) -> None:
         self._session.close()
@@ -209,12 +237,11 @@ class LLMJudgeEnvironment(EnvironmentInterface[LLMJudgeMetadata]):
     def __init__(self, cfg: LLMJudgeEnvConfig | dict[str, Any]):
         self.cfg = cfg
 
-        # Required initialization item #1: base URL to vLLM server.
         self.vllm_server_url = str(cfg.get("vllm_server_url", "")).strip()
-        # Required initialization item #2: model name.
         self.model = str(cfg.get("model", "")).strip()
-        # Required initialization item #3: system prompt.
-        self.system_prompt = str(cfg.get("system_prompt", "")).strip()
+        self.system_prompt = str(
+            cfg.get("system_prompt", DEFAULT_JUDGE_SYSTEM_PROMPT)
+        ).strip()
 
         if not self.vllm_server_url:
             raise ValueError("llm_judge config requires `vllm_server_url`.")
@@ -252,8 +279,10 @@ class LLMJudgeEnvironment(EnvironmentInterface[LLMJudgeMetadata]):
         self,
         message_log_batch: list[LLMMessageLogType],
         metadata: list[LLMJudgeMetadata],
+        return_extracted_answer: bool = False,
     ) -> EnvironmentReturn[LLMJudgeMetadata]:
         judge_prompt_batch: list[str] = []
+        format_check_result_batch: list = []
 
         for conversation, env_info in zip(message_log_batch, metadata):
             # Pull prompt + model response from the conversation and target from metadata.
@@ -266,11 +295,14 @@ class LLMJudgeEnvironment(EnvironmentInterface[LLMJudgeMetadata]):
                 if isinstance(env_info, dict)
                 else ""
             )
+            format_check_result = verify_format(assistant_answer, "</think>")
+            format_check_result_batch.append(format_check_result)
 
             judge_prompt = _build_judge_user_prompt(
                 problem_text=problem_text,
                 ground_truth=ground_truth,
                 assistant_answer=assistant_answer,
+                void_answer=bool(not format_check_result.is_correct_format),
             )
             judge_prompt_batch.append(judge_prompt)
 
@@ -288,10 +320,37 @@ class LLMJudgeEnvironment(EnvironmentInterface[LLMJudgeMetadata]):
             judge_results.extend(worker_result)
 
         rewards = [score for score, _, _ in judge_results]
-        observations = [
-            _build_observation(score, judge_text, judge_error)
-            for score, judge_text, judge_error in judge_results
-        ]
+
+        def _build_observation(idx: int) -> dict[str, str]:
+            score, judge_text, judge_error = judge_results[idx]
+            format_check_result = format_check_result_batch[idx]
+
+            if VOID_ANSWER_TOKEN not in judge_text:
+                if judge_error is not None:
+                    return {
+                        "role": "environment",
+                        "content": f"Environment 'llm_judge': llm_judge errored ({judge_error})\nNo formatting issues.",
+                    }
+                else:
+                    # Keep feedback compact so logs remain readable.
+                    judge_preview = judge_text.replace("\n", " ").strip()[:160]
+                    return {
+                        "role": "environment",
+                        "content": (
+                            f"Environment 'llm_judge': llm_judge_score={score:.3f}; "
+                            f"judge_text='{judge_preview}'\nNo formatting issues."
+                        ),
+                    }
+            else:
+                issues = "\n".join(format_check_result.issues)
+                observations.append(
+                    {
+                        "role": "environment",
+                        "content": f"Environment 'llm_judge': incorrect format.\nFormatting issues:\n{issues}",
+                    }
+                )
+
+        observations = [_build_observation(idx) for idx in range(judge_results)]
 
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32).cpu()
         terminated_tensor = torch.ones_like(rewards_tensor).cpu()
@@ -336,7 +395,9 @@ class MockLLMJudgeEnvironment(EnvironmentInterface[LLMJudgeMetadata]):
         self.cfg = cfg
         self.vllm_server_url = str(cfg.get("vllm_server_url", "")).strip()
         self.model = str(cfg.get("model", "")).strip()
-        self.system_prompt = str(cfg.get("system_prompt", "")).strip()
+        self.system_prompt = str(
+            cfg.get("system_prompt", DEFAULT_JUDGE_SYSTEM_PROMPT)
+        ).strip()
 
         if not self.vllm_server_url:
             raise ValueError("llm_judge config requires `vllm_server_url`.")
