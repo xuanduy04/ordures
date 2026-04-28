@@ -1,0 +1,45 @@
+# Inherit all settings from the stock 1B GRPO math config so we only change dataset wiring.
+defaults: "grpo_math_1B.yaml"
+
+data:
+  # Replace the parent `data` block entirely so the run uses your local JSONL, not OpenMathInstruct-2.
+  _override_: true
+  # Keep the same max input length behavior as the parent config.
+  max_input_seq_length: ${policy.max_total_sequence_length}
+  # Keep sample shuffling enabled for training stability.
+  shuffle: true
+  # Keep dataloader workers small and compatible with the base example.
+  num_workers: 1
+
+  train:
+    # Use the generic JSONL loader for local custom data.
+    dataset_name: "ResponseDataset"
+    # Point to your local training JSONL file (one JSON object per line).
+    data_path: "examples/data/custom_math_train.jsonl"
+    # Reuse a small validation split from train so a separate val file is optional.
+    split_validation_size: 0.05
+    # Keep split reproducible.
+    seed: ${grpo.seed}
+  # Let split_validation_size above create validation automatically.
+  validation: null
+
+  default:
+    # Map your `question` field to the user prompt.
+    input_key: "question"
+    # Map your `ground_truth` field to the target answer used by the math environment.
+    output_key: "ground_truth"
+    # Reuse the same chain-of-thought style prompt template as the base config.
+    prompt_file: "examples/prompts/cot.txt"
+    # No separate system prompt for this minimal setup.
+    system_prompt_file: null
+    # Use the built-in processor that writes output into `extra_env_info.ground_truth`.
+    processor: "math_hf_data_processor"
+    # Route this dataset to the existing math environment from the parent config.
+    env_name: "math"
+
+# Explicitly keep the same environment family used by the base config.
+env:
+  # Override only the math environment block.
+  math:
+    # Keep the exact verifier implementation from the original grpo_math_1B config.
+    math_verify_impl: "hf_math_verify"

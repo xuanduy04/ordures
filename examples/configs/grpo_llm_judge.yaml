@@ -1,0 +1,81 @@
+# Inherit baseline GRPO config and override only fields needed for this custom example.
+defaults: "grpo_math_1B.yaml"
+
+grpo:
+  # Keep this tiny for local smoke tests.
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 4
+  max_num_steps: 20
+  val_period: 5
+  max_val_samples: 32
+  val_batch_size: 32
+
+checkpointing:
+  # Separate output folder for this specific example.
+  checkpoint_dir: "results/grpo_llm_judge"
+  # Track mean LLM-judge reward from environment metrics.
+  metric_name: "val:llm_judge_mean_reward"
+
+policy:
+  # Example policy model. Replace as needed.
+  model_name: "Qwen/Qwen2.5-1.5B"
+  max_total_sequence_length: 1024
+  train_global_batch_size: 32
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  generation:
+    # Answers are short in this tiny MCQ dataset.
+    max_new_tokens: 64
+
+data:
+  max_input_seq_length: 1024
+  train:
+    data_path: "examples/data/mcq_tiny_train.jsonl"
+  validation:
+    data_path: "examples/data/mcq_tiny_val.jsonl"
+  default:
+    # Standard local JSONL loader.
+    dataset_name: "ResponseDataset"
+    input_key: "input"
+    output_key: "output"
+    prompt_file: null
+    system_prompt_file: null
+    # Reuse existing processor to populate:
+    #   extra_env_info["ground_truth"] = output
+    processor: "math_hf_data_processor"
+    # Route all rows in this config to our custom LLM judge env.
+    env_name: "llm_judge"
+
+env:
+  should_use_nemo_gym: false
+  use_genrm_compare: false
+
+  llm_judge:
+    # REQUIRED init item #1:
+    # Base URL for your judge server. No endpoint path required.
+    # `localhost:8000` is also accepted; scheme-less values are normalized to http.
+    vllm_server_url: "http://127.0.0.1:8000"
+
+    # REQUIRED init item #2:
+    # Judge model name. Sent as JSON payload field: `model`.
+    model: "Qwen/Qwen2.5-1.5B-Instruct"
+
+    # REQUIRED init item #3:
+    # Judge behavior instructions.
+    # The environment asks the judge to output only one score in [0,1].
+    system_prompt: |
+      You are a strict answer grader.
+      Compare the assistant answer to the provided reference answer.
+      Return only one numeric score between 0 and 1.
+      Use 1.0 when the answer is fully correct, else 0.0.
+
+logger:
+  wandb_enabled: false
+  tensorboard_enabled: false
+  mlflow_enabled: false
+  swanlab_enabled: false
+  monitor_gpus: false
+
+cluster:
+  gpus_per_node: 1
+  num_nodes: 1

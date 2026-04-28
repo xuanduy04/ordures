@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import importlib
 import os
 import pprint
 
@@ -64,6 +65,13 @@ def main() -> None:
 
     config: MasterConfig = OmegaConf.to_container(config, resolve=True)
     print("Applied CLI overrides")
+
+    custom_imports = config.get("custom_imports", [])
+    if isinstance(custom_imports, str):
+        custom_imports = [custom_imports]
+    for module_name in custom_imports:
+        print(f"[INFO] Importing custom module: {module_name}")
+        importlib.import_module(module_name)
 
     # Print config
     print("Final config:")

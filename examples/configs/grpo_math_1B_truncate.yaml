@@ -1,0 +1,10 @@
+defaults:
+  - grpo_math_1B.yaml
+
+custom_imports:
+  - examples.custom_processors.math_hf_truncate_last
+
+data:
+  default:
+    processor: "math_hf_data_processor_truncate_last"
+

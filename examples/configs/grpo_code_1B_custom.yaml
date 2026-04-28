@@ -1,0 +1,54 @@
+# Inherit the baseline 1B GRPO config so we only change what is needed for code-like data.
+defaults: "grpo_math_1B.yaml"
+
+checkpointing:
+  # CodeJaccard reports preference-style metrics, so pick one that exists during validation.
+  metric_name: "val:average_preference_score"
+
+policy:
+  generation:
+    # Code responses are usually longer than short math answers.
+    max_new_tokens: 1024
+
+data:
+  # Fully replace the inherited data block so we do not keep math-specific defaults.
+  _override_: true
+  # Keep sequence cap tied to policy max length.
+  max_input_seq_length: ${policy.max_total_sequence_length}
+  # Shuffle training samples.
+  shuffle: true
+  # Keep loader workers small for compatibility with the base example.
+  num_workers: 1
+
+  train:
+    # Use local JSONL data via the generic response dataset loader.
+    dataset_name: "ResponseDataset"
+    # Replace with your actual dataset path.
+    data_path: "examples/data/custom_code_train.jsonl"
+    # Auto-split a small validation set from train (optional, but convenient).
+    split_validation_size: 0.05
+    # Deterministic train/val split.
+    seed: ${grpo.seed}
+  # Validation is created from split_validation_size above.
+  validation: null
+
+  default:
+    # Map your prompt/spec field.
+    input_key: "question"
+    # Ground-truth program text for CodeJaccard similarity reward.
+    output_key: "reference_solution"
+    # Avoid math-specific prompt wrappers from the base config.
+    prompt_file: null
+    # No separate system prompt in this minimal setup.
+    system_prompt_file: null
+    # Reuse built-in processor that writes output into extra_env_info.ground_truth.
+    processor: "math_hf_data_processor"
+    # Route this dataset to the built-in code_jaccard environment.
+    env_name: "code_jaccard"
+
+env:
+  code_jaccard:
+    # Parallel workers for reward computation.
+    num_workers: 8
+    # Optional stop strings (not required for scoring).
+    stop_strings: null
